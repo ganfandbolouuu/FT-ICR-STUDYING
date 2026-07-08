@@ -2,24 +2,134 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>CDMS 信号模拟器</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <title>CDMS 单离子计数模拟器</title>
     <style>
-        /* 2. 编写满屏自适应样式，确保在 PPT 窗口里显示完美 */
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; font-family: sans-serif; }
-        #canvas-container { width: 100%; height: 80%; }
-        #controls { width: 100%; height: 20%; display: flex; justify-content: center; align-items: center; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f5f7fa; color: #333; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: #2c3e50; font-size: 22px; }
+        .controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 15px; background: #ecf0f1; border-radius: 8px; }
+        button { padding: 10px 15px; border: none; border-radius: 5px; background: #3498db; color: white; cursor: pointer; font-weight: bold; font-size: 14px; }
+        button:hover { background: #2980b9; }
+        .danger { background: #e74c3c; }
+        .danger:hover { background: #c0392b; }
+        canvas { display: block; width: 100%; border: 1px solid #bdc3c7; border-radius: 5px; margin-bottom: 20px; background: #fafafa; }
+        .stats { text-align: center; font-size: 18px; font-weight: bold; color: #27ae60; margin-bottom: 10px; }
+        h4 { margin-bottom: 5px; color: #34495e; }
     </style>
 </head>
 <body>
-    <div id="canvas-container"></div>
-    <div id="controls">
-        <button id="add-ion">注入新离子</button>
+    <div class="container">
+        <h2>FT-ICR / Orbitrap 诱导电流与单离子阶跃信号模拟</h2>
+        <div class="controls">
+            <div>
+                <label>单个离子电荷数 (z): <span id="z-val">20</span></label><br>
+                <input type="range" id="z-slider" min="1" max="100" value="20">
+            </div>
+            <button id="add-btn">➕ 注入一个新离子</button>
+            <button id="remove-btn" class="danger">💥 弹射/丢失一个离子</button>
+        </div>
+        <div class="stats">当前离子数量: <span id="count-val">3</span> | 阱内总电荷量: <span id="total-val">60</span></div>
+        
+        <h4>离子运动轨迹 (分析池内部)</h4>
+        <canvas id="trapCanvas" height="120"></canvas>
+        
+        <h4>检测电极诱导电流时域信号 (Transient)</h4>
+        <canvas id="signalCanvas" height="200"></canvas>
     </div>
 
     <script>
-        // 3. 这里放入模拟器的核心交互与动画逻辑
-        // 使用 Matter.js 或 Canvas 绘制离子运动和波形图...
+        let ions = [];
+        let ionChargeZ = 20;
+        let targetCount = 3;
+        let time = 0;
+        const trapWidth = 800; 
+        
+        function initIons() {
+            ions = [];
+            for(let i=0; i<targetCount; i++) {
+                ions.push({ phase: Math.random()*Math.PI*2 });
+            }
+            updateStats();
+        }
+
+        function updateStats() {
+            document.getElementById('z-val').innerText = ionChargeZ;
+            document.getElementById('count-val').innerText = ions.length;
+            document.getElementById('total-val').innerText = ions.length * ionChargeZ;
+        }
+
+        document.getElementById('z-slider').addEventListener('input', (e) => {
+            ionChargeZ = parseInt(e.target.value);
+            updateStats();
+        });
+        document.getElementById('add-btn').addEventListener('click', () => {
+            ions.push({ phase: Math.random()*Math.PI*2 });
+            updateStats();
+        });
+        document.getElementById('remove-btn').addEventListener('click', () => {
+            if(ions.length > 0) ions.pop();
+            updateStats();
+        });
+
+        const trapCtx = document.getElementById('trapCanvas').getContext('2d');
+        const sigCtx = document.getElementById('signalCanvas').getContext('2d');
+        document.getElementById('trapCanvas').width = trapWidth;
+        document.getElementById('signalCanvas').width = trapWidth;
+        
+        let signalHistory = new Array(trapWidth).fill(0);
+
+        function animate() {
+            time += 0.05;
+            
+            trapCtx.clearRect(0, 0, trapWidth, 120);
+            // 绘制两块检测电极
+            trapCtx.fillStyle = '#7f8c8d';
+            trapCtx.fillRect(100, 10, 20, 100);
+            trapCtx.fillRect(trapWidth - 120, 10, 20, 100);
+            
+            let currentTotalSignal = 0;
+
+            // 绘制离子并计算诱导电流 (电流与电荷量和速度正比)
+            trapCtx.fillStyle = '#e74c3c';
+            ions.forEach(ion => {
+                let xPos = trapWidth/2 + Math.sin(time + ion.phase) * (trapWidth/2 - 150);
+                trapCtx.beginPath();
+                trapCtx.arc(xPos, 60, 8, 0, Math.PI*2);
+                trapCtx.fill();
+                
+                let velocity = Math.cos(time + ion.phase); 
+                currentTotalSignal += velocity * ionChargeZ;
+            });
+
+            // 更新波形数据
+            signalHistory.push(currentTotalSignal);
+            if(signalHistory.length > trapWidth) signalHistory.shift();
+
+            sigCtx.clearRect(0, 0, trapWidth, 200);
+            
+            // 绘制中心基线
+            sigCtx.strokeStyle = 'rgba(0,0,0,0.1)';
+            sigCtx.beginPath();
+            sigCtx.moveTo(0, 100);
+            sigCtx.lineTo(trapWidth, 100);
+            sigCtx.stroke();
+
+            // 绘制正弦波信号
+            sigCtx.strokeStyle = '#2980b9';
+            sigCtx.lineWidth = 2;
+            sigCtx.beginPath();
+            for(let i=0; i<trapWidth; i++) {
+                let y = 100 - (signalHistory[i] * 0.4); 
+                if(i===0) sigCtx.moveTo(i, y);
+                else sigCtx.lineTo(i, y);
+            }
+            sigCtx.stroke();
+            
+            requestAnimationFrame(animate);
+        }
+
+        initIons();
+        animate();
     </script>
 </body>
 </html>
